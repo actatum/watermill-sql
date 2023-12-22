@@ -19,11 +19,10 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
-var (
-	logger = watermill.NewStdLogger(true, false)
-)
+var logger = watermill.NewStdLogger(true, false)
 
 func newPubSub(t *testing.T, db *stdSQL.DB, consumerGroup string, schemaAdapter sql.SchemaAdapter, offsetsAdapter sql.OffsetsAdapter) (message.Publisher, message.Subscriber) {
 	publisher, err := sql.NewPublisher(
@@ -100,6 +99,21 @@ func newPgxPostgreSQL(t *testing.T) *stdSQL.DB {
 	require.NoError(t, err)
 
 	db := stdlib.OpenDB(*conf)
+
+	err = db.Ping()
+	require.NoError(t, err)
+
+	return db
+}
+
+func newSQLite(t *testing.T) *stdSQL.DB {
+	addr := os.Getenv("WATERMILL_TEST_SQLITE_FILE")
+	if addr == "" {
+		addr = ":memory:"
+	}
+
+	db, err := stdSQL.Open("sqlite", addr)
+	require.NoError(t, err)
 
 	err = db.Ping()
 	require.NoError(t, err)
@@ -195,6 +209,26 @@ func createPgxPostgreSQLPubSub(t *testing.T) (message.Publisher, message.Subscri
 	return createPgxPostgreSQLPubSubWithConsumerGroup(t, "test")
 }
 
+func createSQLitePubSub(t *testing.T) (message.Publisher, message.Subscriber) {
+	return createSQLitePubSubWithConsumerGroup(t, "test")
+}
+
+func createSQLitePubSubWithConsumerGroup(t *testing.T, consumerGroup string) (message.Publisher, message.Subscriber) {
+	schemaAdapter := sql.DefaultSQLiteSchema{
+		GenerateMessagesTableName: func(topic string) string {
+			return fmt.Sprintf("test_%s", topic)
+		},
+	}
+
+	offsetsAdapter := sql.DefaultSQLiteOffsetsAdapter{
+		GenerateMessagesOffsetsTableName: func(topic string) string {
+			return fmt.Sprintf("test_offsets_%s", topic)
+		},
+	}
+
+	return newPubSub(t, newSQLite(t), consumerGroup, schemaAdapter, offsetsAdapter)
+}
+
 func TestMySQLPublishSubscribe(t *testing.T) {
 	t.Parallel()
 
@@ -246,6 +280,24 @@ func TestPgxPostgreSQLPublishSubscribe(t *testing.T) {
 		features,
 		createPgxPostgreSQLPubSub,
 		createPgxPostgreSQLPubSubWithConsumerGroup,
+	)
+}
+
+func TestSQLitePublishSubscribe(t *testing.T) {
+	t.Parallel()
+
+	features := tests.Features{
+		ConsumerGroups:      true,
+		ExactlyOnceDelivery: true,
+		GuaranteedOrder:     true,
+		Persistent:          true,
+	}
+
+	tests.TestPubSub(
+		t,
+		features,
+		createSQLitePubSub,
+		createSQLitePubSubWithConsumerGroup,
 	)
 }
 
